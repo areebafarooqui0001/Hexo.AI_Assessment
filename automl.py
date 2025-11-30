@@ -1,12 +1,4 @@
 #!/usr/bin/env python3
-"""
-AutoMLEAgent (Fixed / Production-Ready)
-- Full, self-contained script.
-- Safe LLM usage (optional). If LLM fails, deterministic fallback script is used.
-- Robust handling for missing dataset path.
-- Fallback produces a valid submission.csv in all cases.
-- No hardcoded secrets.
-"""
 
 from __future__ import annotations
 import os
