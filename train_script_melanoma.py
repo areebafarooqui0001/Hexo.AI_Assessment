@@ -5,137 +5,126 @@ import pandas as pd
 import numpy as np
 import os
 import lightgbm as lgb
+from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import LabelEncoder
 
 # --- Configuration ---
-# Determine dataset path from environment variable or default
-DATASET_PATH = os.environ.get('DATASET_PATH', '.')
+# Determine dataset path
+DATASET_PATH = os.environ.get('DATASET_PATH', '/mnt/c/Users/areeb/OneDrive/Desktop/Hexo_AI.Assessment/data/melanoma')
 SUBMISSION_PATH = os.environ.get('SUBMISSION_PATH', 'submission.csv')
 SEEDS = [0, 1, 2]
 
-# Define file paths
-TRAIN_FILE = os.path.join(DATASET_PATH, 'train.csv')
-TEST_FILE = os.path.join(DATASET_PATH, 'test.csv')
-
 # --- Data Loading ---
 try:
-    df_train = pd.read_csv(TRAIN_FILE)
-    df_test = pd.read_csv(TEST_FILE)
-except FileNotFoundError:
-    # Attempt to load files assuming they might be in a different relative location
-    # This handles cases where DATASET_PATH points to the parent directory of the CSVs
-    TRAIN_FILE = os.path.join(DATASET_PATH, 'melanoma', 'train.csv')
-    TEST_FILE = os.path.join(DATASET_PATH, 'melanoma', 'test.csv')
-    try:
-        df_train = pd.read_csv(TRAIN_FILE)
-        df_test = pd.read_csv(TEST_FILE)
-    except FileNotFoundError as e:
-        print(f"Critical Error: Could not find train.csv or test.csv. Checked paths: {os.path.join(DATASET_PATH, 'train.csv')}, {TRAIN_FILE}")
-        raise e
+    train_path = os.path.join(DATASET_PATH, 'train.csv')
+    test_path = os.path.join(DATASET_PATH, 'test.csv')
+    
+    df_train = pd.read_csv(train_path)
+    df_test = pd.read_csv(test_path)
+except Exception as e:
+    # If data loading fails, we cannot proceed.
+    raise RuntimeError(f"Error loading data: {e}")
 
-# --- ID and Target Detection ---
+# --- Automatic ID and Target Detection ---
 ID_COL = 'image_name'
 TARGET_COL = 'target'
 
+# --- Critical Check: Constant Target Handling ---
+if df_train[TARGET_COL].nunique() <= 1:
+    print(f"Warning: Target column '{TARGET_COL}' is constant or nearly constant ({df_train[TARGET_COL].nunique()} unique values). Falling back to constant prediction.")
+    
+    # Fallback strategy: Predict the single observed value (or 0.0 if binary classification is expected)
+    constant_prediction = df_train[TARGET_COL].mode().iloc[0]
+    
+    submission_df = pd.DataFrame({
+        ID_COL: df_test[ID_COL],
+        TARGET_COL: float(constant_prediction)
+    })
+    
+    submission_df.to_csv(SUBMISSION_PATH, index=False)
+    exit()
+
 # --- Feature Engineering and Preprocessing ---
 
-# Combine data for consistent encoding and imputation
-df_test[TARGET_COL] = np.nan
-# Drop columns not present in test or irrelevant for modeling
-df_combined = pd.concat([
-    df_train.drop(columns=['diagnosis', 'benign_malignant'], errors='ignore'), 
-    df_test
-], ignore_index=True)
+# Combine data for consistent preprocessing
+df_train['is_train'] = 1
+df_test['is_train'] = 0
+df_combined = pd.concat([df_train.drop(columns=[TARGET_COL]), df_test], ignore_index=True)
 
-# Identify features to use
-EXCLUDE_COLS = [ID_COL, TARGET_COL]
-FEATURES = [col for col in df_combined.columns if col not in EXCLUDE_COLS]
+# Features to use (excluding IDs and redundant/highly correlated columns like diagnosis/benign_malignant)
+EXCLUDE_COLS = [ID_COL, TARGET_COL, 'is_train', 'diagnosis', 'benign_malignant']
+features = [col for col in df_train.columns if col not in EXCLUDE_COLS]
 
-CATEGORICAL_FEATURES = ['sex', 'anatom_site_general_challenge', 'patient_id']
-NUMERICAL_FEATURES = ['age_approx']
+# Identify feature types
+categorical_cols = df_combined[features].select_dtypes(include=['object']).columns.tolist()
+numerical_cols = df_combined[features].select_dtypes(include=['float64', 'int64']).columns.tolist()
 
-# 1. Imputation
-for col in NUMERICAL_FEATURES:
-    df_combined[col].fillna(df_combined[col].median(), inplace=True)
+# 1. Handle Categorical Features
+# Impute missing categorical values with 'missing'
+for col in categorical_cols:
+    df_combined[col] = df_combined[col].fillna('missing')
 
-for col in CATEGORICAL_FEATURES:
-    # Fill NaNs with a specific category 'missing'
-    df_combined[col].fillna('missing', inplace=True)
+# Apply One-Hot Encoding
+df_combined = pd.get_dummies(df_combined, columns=categorical_cols, dummy_na=False)
 
-# 2. Encoding Categorical Features
-# Use Label Encoding for all categorical features, suitable for tree-based models like LGBM.
-for col in CATEGORICAL_FEATURES:
-    le = LabelEncoder()
-    df_combined[col] = le.fit_transform(df_combined[col].astype(str))
+# 2. Handle Numerical Features (Imputation)
+# Impute missing numerical values with the median
+imputer = SimpleImputer(strategy='median')
+df_combined[numerical_cols] = imputer.fit_transform(df_combined[numerical_cols])
 
-# Separate back into train and test
-X = df_combined.iloc[:len(df_train)].drop(columns=EXCLUDE_COLS)
-y = df_combined.iloc[:len(df_train)][TARGET_COL]
-X_test = df_combined.iloc[len(df_train):].drop(columns=EXCLUDE_COLS)
+# Update feature list after OHE
+feature_cols = [col for col in df_combined.columns if col not in EXCLUDE_COLS and col != 'patient_id'] # Drop patient_id due to high cardinality relative to N=50
 
-# Check target variability
-if y.nunique() > 1:
-    TASK_TYPE = 'binary'
-    METRIC = 'auc'
-else:
-    TASK_TYPE = 'constant'
-    CONSTANT_PREDICTION = y.iloc[0]
-    print(f"Warning: Target column '{TARGET_COL}' is constant (value: {CONSTANT_PREDICTION}). Using constant prediction.")
+# Re-split data
+X = df_combined[df_combined['is_train'] == 1].drop(columns=['is_train'])
+X_test = df_combined[df_combined['is_train'] == 0].drop(columns=['is_train'])
+y = df_train[TARGET_COL]
 
-# --- Model Training (if not constant) ---
+# Align columns
+X = X[feature_cols]
+X_test = X_test[feature_cols]
 
-if TASK_TYPE == 'binary':
+# --- Model Training (LightGBM) ---
+
+def train_lgbm(X, y, X_test, seeds):
+    test_preds = np.zeros(X_test.shape[0])
     
-    # LightGBM Parameters
-    lgb_params = {
-        'objective': 'binary',
-        'metric': METRIC,
-        'boosting_type': 'gbdt',
-        'n_estimators': 100,
-        'learning_rate': 0.05,
-        'feature_fraction': 0.8,
-        'bagging_fraction': 0.8,
-        'bagging_freq': 1,
-        'verbose': -1,
-        'n_jobs': -1,
-    }
-
-    test_predictions = np.zeros(len(X_test))
-    
-    # Identify indices of categorical features in the final feature matrix X
-    cat_feature_indices = [X.columns.get_loc(c) for c in CATEGORICAL_FEATURES if c in X.columns]
-
-    for seed in SEEDS:
-        lgb_params['seed'] = seed
+    for seed in seeds:
+        params = {
+            'objective': 'binary',
+            'metric': 'auc',
+            'boosting_type': 'gbdt',
+            'n_estimators': 100, 
+            'learning_rate': 0.05,
+            'num_leaves': 10,
+            'max_depth': 3,
+            'seed': seed,
+            'n_jobs': -1,
+            'verbose': -1,
+            'colsample_bytree': 0.7,
+            'subsample': 0.7,
+            'reg_alpha': 0.1,
+            'reg_lambda': 0.1,
+        }
         
-        model = lgb.LGBMClassifier(**lgb_params)
+        model = lgb.LGBMClassifier(**params)
         
-        try:
-            # Explicitly pass categorical features
-            model.fit(X, y, categorical_feature=cat_feature_indices)
-        except Exception:
-            # Fallback if explicit categorical handling fails
-            model.fit(X, y)
-
-        # Predict probabilities for the positive class (1)
-        preds = model.predict_proba(X_test)[:, 1]
-        test_predictions += preds / len(SEEDS)
+        # Train on the entire small dataset
+        model.fit(X, y)
         
-    final_predictions = test_predictions
+        # Predict probabilities
+        test_preds += model.predict_proba(X_test)[:, 1] / len(seeds)
+        
+    return test_preds
 
-else: # TASK_TYPE == 'constant'
-    # Predict the constant value (0.0 or 1.0)
-    final_predictions = np.full(len(X_test), float(CONSTANT_PREDICTION))
-
+# Train and predict
+test_predictions = train_lgbm(X, y, X_test, SEEDS)
 
 # --- Submission Generation ---
-
 submission_df = pd.DataFrame({
     ID_COL: df_test[ID_COL],
-    'target': final_predictions
+    TARGET_COL: test_predictions
 })
 
 # Save the submission file
 submission_df.to_csv(SUBMISSION_PATH, index=False)
-
-print(f"Submission saved to {SUBMISSION_PATH}")
