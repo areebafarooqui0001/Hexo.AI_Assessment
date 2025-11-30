@@ -1,0 +1,12 @@
+librosa
+google-genai
+torch 
+torchvision 
+torchaudio
+lightgbm
+xgboost
+scikit-learn
+pandas
+numpy
+timm
+python-dotenv
