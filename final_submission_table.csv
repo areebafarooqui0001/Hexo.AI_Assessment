@@ -1,0 +1,6 @@
+competition_id,score,gold_threshold,silver_threshold,bronze_threshold,median_threshold,any_medal,gold_medal,silver_medal,bronze_medal,above_median,submission_exists,valid_submission,is_lower_better,created_at,submission_path
+tabular-playground-series-may-2022,0.81727,0.99823,0.99822,0.99818,0.972675,False,False,False,False,False,True,True,False,2025-12-19T01:10:37.359180,../mlebench_results/tabular-playground-series-may-2022/seed_0/submission.csv
+spooky-author-identification,1.08474,0.16506,0.26996,0.29381,0.418785,False,False,False,False,False,True,True,True,2025-12-19T00:52:48.822728,../mlebench_results/spooky-author-identification/seed_0/submission.csv
+the-icml-2013-whale-challenge-right-whale-redux,0.5,0.98961,0.95017,0.90521,0.86521,False,False,False,False,False,True,True,False,2025-12-19T01:12:39.235519,../mlebench_results/the-icml-2013-whale-challenge-right-whale-redux/seed_0/submission.csv
+text-normalization-challenge-english-language,,0.99724,0.99135,0.99038,0.99037,False,False,False,False,False,True,False,False,2025-12-19T01:01:54.316739,../mlebench_results/text-normalization-challenge-english-language/seed_0/submission.csv
+siim-isic-melanoma-classification,,,,,,,,,,,false,false,,,
